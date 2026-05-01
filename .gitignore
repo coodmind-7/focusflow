@@ -1,0 +1,54 @@
+# Gradle files
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Log files
+*.log
+
+# Kotlin
+*.class
+*.kotlin_module
+
+# Generated files
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Test / coverage
+*.ec
+
+# Hilt / KSP generated (already in build, but be explicit)
+app/build/generated/
+
+# Room schema exports (if you want to keep them, remove this)
+# app/schemas/
+
+# Signing files
+*.jks
+*.keystore
+
+# Version control
+*.orig
+
+# Node (if any)
+node_modules/
+
+# Claude settings
+.claude/settings.local.json

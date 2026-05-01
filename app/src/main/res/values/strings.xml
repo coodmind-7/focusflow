@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FocusFlow</string>
+    <string name="nav_timer">计时</string>
+    <string name="nav_stats">统计</string>
+    <string name="nav_tasks">任务</string>
+    <string name="timer_notification_channel">计时器</string>
+    <string name="timer_notification_desc">显示计时器进行状态</string>
+    <string name="timer_start">开始</string>
+    <string name="timer_pause">暂停</string>
+    <string name="timer_resume">继续</string>
+    <string name="timer_stop">结束</string>
+    <string name="mode_count_up">正计时</string>
+    <string name="mode_count_down">倒计时</string>
+    <string name="select_target_duration">选择目标时长</string>
+    <string name="today_focus">今日目标专注</string>
+    <string name="goal_achieved">今日目标达成!</string>
+    <string name="goal_edit_title">修改每日目标</string>
+    <string name="goal_hours">小时</string>
+    <string name="goal_minutes">分钟</string>
+    <string name="no_tasks_hint">请先在「任务」页创建任务</string>
+</resources>
