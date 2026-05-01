@@ -48,28 +48,23 @@ class StatsViewModel @Inject constructor(
     private val timerRepository: TimerRepository
 ) : ViewModel() {
 
-    // 普通变量，不触发 combine，只参与 mergeLiveElapsed 计算
+    // 记录 DB 中运行记录的 duration，用于 mergeLiveElapsed 计算 delta
     private var runningRecordSavedMs: Long = 0L
-
-    // 一次性触发器，存储 onEnter() 那一刻的 elapsedMs
-    private val _refreshTrigger = MutableStateFlow(0L)
 
     fun onEnter() {
         viewModelScope.launch {
             val record = timerRepository.getRunningRecord()
-            val oldDuration = record?.duration ?: 0L
             val currentElapsed = timerManager.getCurrentElapsedMs()
 
             // 1. 先记录旧值，用于计算 delta
-            runningRecordSavedMs = oldDuration
-            // 2. 触发 combine。此时 stats 可能还是旧的，但 delta 会把增量补上
-            _refreshTrigger.value = currentElapsed
+            runningRecordSavedMs = record?.duration ?: 0L
 
-            // 3. 写库持久化
+            // 2. 写库持久化
             if (timerManager.isRunning && record != null) {
                 timerRepository.updateRecord(record.copy(duration = currentElapsed))
             }
-            // 4. 写库完成后把 savedMs 同步为最新值。
+            
+            // 3. 写库完成后把 savedMs 同步为最新值
             //    等 Room Flow 再次发射时 delta = 0，结果与上次相同，被 distinctUntilChanged 拦截
             runningRecordSavedMs = currentElapsed
         }
@@ -90,10 +85,9 @@ class StatsViewModel @Inject constructor(
         combine(
             getStatsUseCase(info.start.format(isoFormatter), info.end.format(isoFormatter)),
             getDailyGoalsUseCase.getByDateRange(info.start.format(isoFormatter), info.end.format(isoFormatter)),
-            _refreshTrigger
-        ) { stats, goals, triggerElapsed ->
-            val event = timerManager.timerEvents.value
-            val enhancedStats = mergeLiveElapsed(stats, event, info, triggerElapsed)
+            timerManager.timerEvents
+        ) { stats, goals, event ->
+            val enhancedStats = mergeLiveElapsed(stats, event, info)
             val achievedDays = goals.count { it.achieved }
             val totalDays = ChronoUnit.DAYS.between(info.start, info.end).toInt() + 1
             StatsUiState(
@@ -113,18 +107,16 @@ class StatsViewModel @Inject constructor(
     private fun mergeLiveElapsed(
         stats: StatsData,
         event: TimerEvent,
-        info: PeriodInfo,
-        triggerElapsed: Long
+        info: PeriodInfo
     ): StatsData {
         if (event.state != TimerState.RUNNING && event.state != TimerState.PAUSED) return stats
-        if (triggerElapsed <= 0L) return stats
 
         val todayStr = today.format(isoFormatter)
         val rangeStart = info.start.format(isoFormatter)
         val rangeEnd = info.end.format(isoFormatter)
         if (todayStr < rangeStart || todayStr > rangeEnd) return stats
 
-        val liveSeconds = triggerElapsed / 1000
+        val liveSeconds = event.elapsedMs / 1000
         val savedSeconds = runningRecordSavedMs / 1000
         val deltaSeconds = liveSeconds - savedSeconds
         if (deltaSeconds <= 0) return stats
