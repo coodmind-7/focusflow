@@ -1,0 +1,562 @@
+{
+  "meta": {
+    "version": "3.0",
+    "generated_at": "2026-05-02T13:30:00+08:00",
+    "source_path": "./app/src/main/java/com/focusflow/app",
+    "total_cases": 11,
+    "confidence_summary": {
+      "high": 6,
+      "medium": 4,
+      "low": 1
+    }
+  },
+  "analysis_summary": {
+    "product_type": "Android 移动应用（专注计时器）",
+    "tech_stack": ["Kotlin", "Jetpack Compose", "Room (SQLite)", "Hilt (DI)", "DataStore", "Navigation Compose", "Coroutines/Flow"],
+    "core_features": [
+      "任务驱动的专注计时器（正计时/倒计时）",
+      "任务管理（创建/编辑/删除/排序/颜色标签）",
+      "每日专注目标设定与达成庆祝",
+      "统计数据可视化（环形图、任务分布、日/周/月切换）",
+      "数据导出/导入（JSON格式，支持选择性导入）"
+    ],
+    "user_journey": [
+      "打开App → 看到空状态或任务列表 → 创建任务",
+      "点击任务播放按钮 → 计时器开始运行 → 实时显示已用时间",
+      "点击暂停 → 计时暂停并保存进度 → 可切换到其他任务",
+      "长按任务 → 显示操作菜单（编辑/删除/上移/下移/重置）",
+      "切换到统计Tab → 选择日/周/月 → 查看环形图和任务分布",
+      "切换到设置Tab → 选择导出类别 → 导出JSON → 或导入备份"
+    ]
+  },
+  "risk_patterns_detected": [
+    {
+      "pattern": "竞态条件",
+      "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+      "line": 236,
+      "description": "startTimer() 内部启动协程进行任务切换，无互斥锁保护。用户快速切换任务时多个协程可能交错执行，导致 runningRecordId、currentRecordSavedDuration 状态不一致。"
+    },
+    {
+      "pattern": "并发控制缺失",
+      "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+      "line": 94,
+      "description": "pauseDebounceJob 和 wasRunningBeforePause 在多处被读写（onAppPause/onAppResume/startTimer），无同步保护。App前后台快速切换可能导致计时器状态错误。"
+    },
+    {
+      "pattern": "状态混乱",
+      "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+      "line": 154,
+      "description": "currentRecordSavedDuration 在持久化循环和 startTimer 中并发修改，无原子性保证。todayTotalSeconds 的计算依赖此值，可能出现重复计数或漏计数。"
+    },
+    {
+      "pattern": "时间依赖",
+      "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+      "line": 272,
+      "description": "代码注释明确承认：跨午夜计时（23:30–00:30）将所有时间归属到开始日期。用户可能困惑为什么昨天的计时显示在统计中。"
+    },
+    {
+      "pattern": "空值未处理",
+      "file": "app/src/main/java/com/focusflow/app/ui/settings/SettingsViewModel.kt",
+      "line": 63,
+      "description": "contentResolver.openOutputStream(uri) 可能返回 null，虽然通过 ?: throw 处理，但如果 use 在 null 上调用会 NPE。幸运的是这里用了 ?.use 安全调用。但 openInputStream 也有相同模式。"
+    },
+    {
+      "pattern": "无输入校验",
+      "file": "app/src/main/java/com/focusflow/app/ui/timer/GoalEditDialog.kt",
+      "line": 82,
+      "description": "hours.toIntOrNull() ?: 0 将无效输入静默转为 0。用户输入字母时无错误提示，目标会被设为最小值 60 秒，用户可能不理解为什么。"
+    },
+    {
+      "pattern": "错误处理缺失",
+      "file": "app/src/main/java/com/focusflow/app/ui/settings/SettingsViewModel.kt",
+      "line": 68,
+      "description": "导出/导入失败时仅显示 message，但导入失败后数据可能处于半导入状态（部分表已替换，部分未替换）。BackupManager.importFromJson 中各步骤独立执行，无全局事务回滚。"
+    },
+    {
+      "pattern": "外部依赖",
+      "file": "app/src/main/java/com/focusflow/app/data/backup/BackupManager.kt",
+      "line": 65,
+      "description": "导入时 taskIdMap 映射依赖新旧 ID 的顺序对应。如果 replaceAllTasks 返回的顺序与 data.tasks 不一致，timerRecords 的 taskId 映射会错乱。"
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "UA-ASYNC-001",
+      "name": "快速切换任务时计时器状态错乱",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+        "line": 236,
+        "function": "startTimer()",
+        "snippet": "fun startTimer(task: TaskLabel) {\n    viewModelScope.launch {\n        if (task.id == timerManager.getCurrentTaskId() && timerManager.isPaused) { ... }\n        if (task.id == timerManager.getCurrentTaskId() && timerManager.isRunning) return@launch\n        if (timerManager.isRunning || timerManager.isPaused) {\n            val elapsed = if (timerManager.isRunning) { timerManager.pause() } else { timerManager.getCurrentElapsedMs() }\n            if (runningRecordId != -1L) {\n                stopTimerUseCase.updateDuration(runningRecordId, elapsed)\n                taskSessions[currentId] = TaskTimerSession(runningRecordId, elapsed)\n                runningRecordId = -1\n            }\n        }\n        ...\n    }\n}"
+      },
+      "risk_pattern": "竞态条件 — 多协程无互斥锁保护对共享状态 runningRecordId / taskSessions 的读写",
+      "journey_stage": "操作",
+      "user_persona": "效率型用户，习惯快速在多个任务间切换计时",
+      "preconditions": [
+        "至少创建了 2 个任务（Task A 和 Task B）",
+        "Task A 正在运行计时中"
+      ],
+      "steps": [
+        "1. Task A 正在运行（runningRecordId = X）",
+        "2. 用户快速点击 Task B 的播放按钮",
+        "3. 在 startTimer(B) 协程执行到 timerManager.pause() 之前，用户再次快速点击 Task A 的播放按钮",
+        "4. 两个协程同时执行，都读取 runningRecordId = X",
+        "5. 一个协程将 X 写入 taskSessions，另一个也可能覆盖或产生重复记录"
+      ],
+      "expected_result": "Task A 和 Task B 的计时状态正确保存，无数据丢失，无重复记录",
+      "actual_risk": "可能出现 runningRecordId 被一个协程设为 -1 后，另一个协程仍用旧值更新数据库，导致记录重复或丢失。UI 显示的任务暂停状态可能与实际不一致。",
+      "severity": "严重",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "TimerScreen → 快速连续点击不同任务的播放按钮",
+        "tools_hint": ["Espresso", "UI Automator 模拟快速连续点击"]
+      },
+      "assertions": [
+        "timer_records 表中所有记录的 duration 总和与 TimerManager 报告的累计时间一致",
+        "taskSessions 的 key 集合与实际 pause 状态一致",
+        "无 endTime=NULL 的残留记录（超过正在运行的一条）"
+      ],
+      "fix_suggestion": "在 startTimer 方法中使用 Mutex 保护整个任务切换逻辑，或使用 actor 模式将所有计时操作序列化。",
+      "confidence": "高",
+      "executable": true,
+      "estimated_complexity": "高",
+      "estimated_time_minutes": 15
+    },
+    {
+      "id": "UA-ASYNC-002",
+      "name": "App 前后台快速切换导致计时器意外暂停或继续",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+        "line": 209,
+        "function": "onAppPause() / onAppResume()",
+        "snippet": "private fun onAppPause() {\n    if (timerManager.isRunning) {\n        wasRunningBeforePause = true\n        pauseDebounceJob?.cancel()\n        pauseDebounceJob = viewModelScope.launch {\n            delay(3_000)\n            pauseTimer()\n        }\n    }\n}\n\nprivate fun onAppResume() {\n    if (wasRunningBeforePause) {\n        pauseDebounceJob?.cancel()\n        pauseDebounceJob = null\n        if (timerManager.isPaused) {\n            val task = uiState.value.tasks.find { ... }\n            if (task != null) {\n                viewModelScope.launch { resumeTimer(task) }\n            }\n        }\n        wasRunningBeforePause = false\n    }\n}"
+      },
+      "risk_pattern": "并发控制缺失 — wasRunningBeforePause 和 pauseDebounceJob 无同步保护",
+      "journey_stage": "操作",
+      "user_persona": "多任务用户，频繁在 App 和其他应用间切换",
+      "preconditions": [
+        "计时器正在运行",
+        "App 在前台"
+      ],
+      "steps": [
+        "1. 计时器正在运行，用户按 Home 键切到后台",
+        "2. onAppPause() 触发，设置 wasRunningBeforePause=true，启动 3 秒延迟暂停",
+        "3. 2 秒后用户切回 App，onAppResume() 取消延迟 Job，检测到 timerManager.isPaused = false（因为延迟还没执行），不恢复",
+        "4. 计时器继续运行（预期行为）",
+        "5. 但如果在 delay 即将执行的瞬间 onAppResume 触发，cancel 和 delay 可能存在竞态"
+      ],
+      "expected_result": "无论前台/后台切换多快，计时器状态始终正确：在后台超过 3 秒后暂停，回到前台恢复。",
+      "actual_risk": "如果 delay(3_000) 刚好在 cancel 之前到期，pauseTimer() 可能在 onAppResume 之后执行，导致计时器在回到前台后立即暂停。用户看到计时器无故暂停。",
+      "severity": "一般",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "TimerScreen → 按 Home → 立即切回 → 反复多次",
+        "tools_hint": ["adb shell 模拟 Home 按键", "Espresso 检测 TimerState"]
+      },
+      "assertions": [
+        "快速前后台切换 20 次后，计时器状态与用户预期一致（在后台时暂停，回到前台后恢复）",
+        "无 ANR 或 crash"
+      ],
+      "fix_suggestion": "在 delay 块内再次检查 wasRunningBeforePause 标记，或者使用 atomic 的方式检查 Job 是否已被取消。",
+      "confidence": "中",
+      "executable": true,
+      "estimated_complexity": "中",
+      "estimated_time_minutes": 10
+    },
+    {
+      "id": "UA-ASYNC-003",
+      "name": "跨午夜计时导致日期归属错误",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+        "line": 272,
+        "function": "startTimer()",
+        "snippet": "// NOTE: date is fixed at creation time. A timer crossing midnight\n// (e.g. 23:30–00:30) keeps the original date — all elapsed time\n// is attributed to the start date. Splitting records at midnight\n// would require detecting date changes in the persistence loop.\nval record = TimerRecord(\n    taskId = task.id,\n    date = todayDate,  // 固定在启动时刻\n    startTime = System.currentTimeMillis(),\n    ...\n)"
+      },
+      "risk_pattern": "时间依赖 — 跨午夜计时日期归属错误（代码中已注释承认此设计限制）",
+      "journey_stage": "结果",
+      "user_persona": "夜间工作者，习惯在深夜使用计时器",
+      "preconditions": [
+        "当前时间为 23:30 左右",
+        "有一个任务正在运行或即将启动"
+      ],
+      "steps": [
+        "1. 用户在 23:30 启动任务计时",
+        "2. 计时持续运行到 00:30（跨午夜）",
+        "3. 用户停止计时",
+        "4. 用户切换到统计页面查看今天的记录",
+        "5. 再切换到昨天的统计页面"
+      ],
+      "expected_result": "00:00 之前的时间归属到前一天，00:00 之后的时间归属到当天",
+      "actual_risk": "所有 60 分钟都会归属到前一天的日期（启动时的日期）。用户在当天统计中看不到这 30 分钟，而在前一天统计中会多出 30 分钟。",
+      "severity": "一般",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "TimerScreen → 启动计时 → 修改系统时间模拟跨午夜 → 停止计时 → 验证统计",
+        "tools_hint": ["adb 修改系统时间", "Room 数据库直接查询 date 字段"]
+      },
+      "assertions": [
+        "停止计时后，timer_records 表中只有一条记录，且 date 为启动时的日期",
+        "前一天的统计包含全部时长",
+        "当天的统计不包含任何时长（虽然是 00:00 后停止的）"
+      ],
+      "fix_suggestion": "在持久化循环（60 秒一次）中检测日期变化，若变化则拆分记录。或使用 UTC 时间戳存储，查询时按时间范围而非日期字符串。",
+      "confidence": "高",
+      "executable": true,
+      "estimated_complexity": "中",
+      "estimated_time_minutes": 10
+    },
+    {
+      "id": "UA-DATA-004",
+      "name": "导入备份数据后任务 ID 映射错乱",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/data/backup/BackupManager.kt",
+        "line": 74,
+        "function": "importFromJson()",
+        "snippet": "if (importTasks && data.tasks.isNotEmpty()) {\n    val entities = data.tasks.map { item ->\n        TaskLabelEntity(name = item.name, color = item.color, ...)\n    }\n    val newIds = taskLabelDao.replaceAllTasks(entities)\n    taskIdMap = data.tasks.mapIndexed { i, item -> item.id to newIds[i] }.toMap()\n}\n\nif (importTimerRecords && data.timerRecords.isNotEmpty()) {\n    timerRecordDao.replaceAllRecords(\n        data.timerRecords.map { item ->\n            TimerRecordEntity(\n                taskId = taskIdMap[item.taskId] ?: item.taskId,  // 回退到旧 ID\n                ...\n            )\n        }\n    )\n}"
+      },
+      "risk_pattern": "外部依赖 — 导入时 ID 映射依赖 replaceAllTasks 返回顺序与 data.tasks 一致",
+      "journey_stage": "结果",
+      "user_persona": "数据迁移用户，从旧设备或备份文件恢复数据",
+      "preconditions": [
+        "有一个包含任务和计时记录的备份 JSON 文件",
+        "当前数据库为空或有不同任务"
+      ],
+      "steps": [
+        "1. 用户选择导入一个包含 5 个任务和 50 条计时记录的备份文件",
+        "2. replaceAllTasks 为 5 个任务分配新 ID（假设 10-14）",
+        "3. newIds 按 index 对应，taskIdMap 建立映射 {旧ID → 新ID}",
+        "4. replaceAllRecords 使用 taskIdMap 重映射计时记录的 taskId",
+        "5. 但如果某个旧 taskId 不在映射中（任务被跳过导入），计时记录仍用旧 ID"
+      ],
+      "expected_result": "所有计时记录正确关联到导入后的新任务",
+      "actual_risk": "如果导入时 exclude 了 tasks 但 include 了 timerRecords，timerRecords 的 taskId 不会映射，导致关联到不存在或错误的任务。在统计页面可能显示'已删除'标签。",
+      "severity": "一般",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "SettingsScreen → 选择导入文件 → 勾选/取消部分类别 → 确认导入",
+        "tools_hint": ["Espresso 点击导入按钮", "提供预制的测试 JSON 文件"]
+      },
+      "assertions": [
+        "导入后统计页面的任务名称与导入文件中的一致",
+        "不存在 taskId 映射到不存在的任务（除非任务被删除）",
+        "导入所有四个类别后，UI 状态一致性检查通过"
+      ],
+      "fix_suggestion": "导入时，如果 tasks 未导入但 timerRecords 已导入，应提示用户或自动使用记录的 taskName 字段（已存在）。可建立更健壮的 taskName+color 匹配机制。",
+      "confidence": "高",
+      "executable": true,
+      "estimated_complexity": "中",
+      "estimated_time_minutes": 12
+    },
+    {
+      "id": "UA-DATA-005",
+      "name": "导入 JSON 中途失败导致数据半损坏",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/data/backup/BackupManager.kt",
+        "line": 65,
+        "function": "importFromJson()",
+        "snippet": "suspend fun importFromJson(jsonString: String, ...) {\n    val data = json.decodeFromString(...)\n    var taskIdMap: Map<Long, Long> = emptyMap()\n    if (importTasks && data.tasks.isNotEmpty()) {\n        ...\n        taskLabelDao.replaceAllTasks(entities)  // 步骤1: 任务已替换\n    }\n    if (importTimerRecords && data.timerRecords.isNotEmpty()) {\n        timerRecordDao.replaceAllRecords(...)   // 步骤2: 如果这里抛异常...\n    }\n    if (importDailyGoals && data.dailyGoals.isNotEmpty()) {\n        dailyGoalDao.replaceAllGoals(...)       // 步骤3: 不会执行\n    }\n}"
+      },
+      "risk_pattern": "错误处理缺失 — 导入过程中多步数据库操作无全局事务",
+      "journey_stage": "结果",
+      "user_persona": "导入损坏或格式不兼容的备份文件的用户",
+      "preconditions": [
+        "当前数据库已有一些数据",
+        "准备导入一个 JSON 文件（其中 timerRecords 格式可能有问题）"
+      ],
+      "steps": [
+        "1. 用户选择导入包含所有类别的 JSON 文件",
+        "2. importTasks 成功执行，原有任务被删除并替换为新任务",
+        "3. importTimerRecords 执行时，由于 JSON 中某条记录格式异常，抛出异常",
+        "4. 异常被 SettingsViewModel 捕获，显示'导入失败'",
+        "5. 但此时任务已经替换，计时记录和每日目标未替换",
+        "6. 用户的数据处于不一致状态：新任务 + 旧记录（引用可能不存在的 taskId）"
+      ],
+      "expected_result": "导入失败后，数据库恢复到导入前的完整状态",
+      "actual_risk": "部分表已更新（tasks），部分表未更新（timer_records, daily_goals）。用户的数据处于半损坏状态，新旧数据混合且 taskId 不匹配。",
+      "severity": "严重",
+      "execution": {
+        "mode": "code",
+        "entry_point": "BackupManager.importFromJson() → 传入包含格式错误的 timerRecords 的 JSON",
+        "tools_hint": ["单元测试 → 构造非法 JSON 数据", "Room in-memory 数据库测试"]
+      },
+      "assertions": [
+        "导入异常后，task_labels 表恢复到导入前状态",
+        "导入异常后，timer_records 表和 daily_goals 表保持不变",
+        "所有三个表的记录数与导入前一致"
+      ],
+      "fix_suggestion": "在 importFromJson 中使用 Room 的 @Transaction 或手动事务包装所有替换操作。导入前先在临时表中验证数据完整性。",
+      "confidence": "高",
+      "executable": true,
+      "estimated_complexity": "中",
+      "estimated_time_minutes": 8
+    },
+    {
+      "id": "UA-INPUT-006",
+      "name": "GoalEditDialog 输入无效值静默修正导致用户困惑",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/timer/GoalEditDialog.kt",
+        "line": 82,
+        "function": "GoalEditDialog() → confirmButton onClick",
+        "snippet": "val h = hours.toIntOrNull() ?: 0\nval m = minutes.toIntOrNull() ?: 0\nval total = (h * 3600L + m * 60L).coerceAtLeast(60L)\nonSave(total)"
+      },
+      "risk_pattern": "无输入校验 — 非数字输入静默转为 0，零目标被强制设为 60 秒",
+      "journey_stage": "准备",
+      "user_persona": "新手用户，可能误操作输入非数字内容",
+      "preconditions": [
+        "打开每日目标修改对话框",
+        "默认显示当前目标时长"
+      ],
+      "steps": [
+        "1. 用户在'小时'输入框中输入字母 'abc'",
+        "2. 用户在'分钟'输入框中输入 '0'",
+        "3. 用户点击保存",
+        "4. toIntOrNull() 对 'abc' 返回 null → 回退为 0",
+        "5. (0*3600 + 0*60) = 0, coerceAtLeast(60) → 60 秒",
+        "6. 目标被设为 1 分钟"
+      ],
+      "expected_result": "用户输入字母时应有错误提示，不应允许保存",
+      "actual_risk": "用户可能会困惑为什么输入的数字没有生效，或者不知道目标已被修改为 1 分钟。静默的数据修正掩盖了用户输入错误。",
+      "severity": "轻微",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "TimerScreen → 点击每日目标栏 → 在 GoalEditDialog 中输入非法值",
+        "tools_hint": ["Compose UI Test → 输入非法字符 → 点击保存"]
+      },
+      "assertions": [
+        "输入字母后点击保存，每日目标变为 1 分钟（60秒）",
+        "Snackbar 或 UI 无任何错误提示",
+        "再次打开对话框，显示 0 小时 1 分钟"
+      ],
+      "fix_suggestion": "在 onValueChange 中过滤非数字字符（已在做），但在保存时应验证原始输入：如果 hours 或 minutes 为空字符串，使用原值而非静默替换为 0。同时添加输入验证提示。",
+      "confidence": "高",
+      "executable": true,
+      "estimated_complexity": "低",
+      "estimated_time_minutes": 5
+    },
+    {
+      "id": "UA-INPUT-007",
+      "name": "TaskEditDialog 自定义分钟数字段输入非法值",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/task/TaskEditDialog.kt",
+        "line": 114,
+        "function": "TaskEditDialog() → OutlinedTextField onValueChange",
+        "snippet": "OutlinedTextField(\n    value = durationMinutes?.toString() ?: \"\",\n    onValueChange = { value ->\n        durationMinutes = value.toIntOrNull()\n    },\n    label = { Text(\"自定义分钟数\") },\n    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),\n    ...\n)"
+      },
+      "risk_pattern": "无输入校验 — 非数字输入使 durationMinutes 变为 null，UI 无反馈",
+      "journey_stage": "准备",
+      "user_persona": "创建倒计时任务时手动输入时长的用户",
+      "preconditions": [
+        "打开任务创建/编辑对话框",
+        "选择倒计时模式",
+        "在自定义分钟数字段输入"
+      ],
+      "steps": [
+        "1. 用户选择倒计时模式",
+        "2. 用户在自定义分钟数字段输入 'abc'",
+        "3. value.toIntOrNull() 返回 null",
+        "4. durationMinutes = null",
+        "5. 用户点击保存",
+        "6. 任务被保存，但 defaultDurationMinutes 为 null"
+      ],
+      "expected_result": "输入非法值时应有提示，或阻止保存，或提示用户输入有效数字",
+      "actual_risk": "任务被创建为倒计时模式但没有时长限制。计时器会倒计时但不自动停止（因为没有 targetDuration），或者 UI 显示异常。",
+      "severity": "轻微",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "TimerScreen → 创建/编辑任务 → 倒计时模式 → 输入非法自定义分钟数",
+        "tools_hint": ["Compose UI Test → 输入非数字 → 点击保存"]
+      },
+      "assertions": [
+        "任务创建成功，但计时器行为异常（无目标时长的倒计时）",
+        "任务行显示'倒计时'但无分钟数"
+      ],
+      "fix_suggestion": "在保存前验证：如果是倒计时模式，必须有有效的 durationMinutes。无效时显示错误提示并阻止保存。",
+      "confidence": "高",
+      "executable": true,
+      "estimated_complexity": "低",
+      "estimated_time_minutes": 5
+    },
+    {
+      "id": "UA-UI-008",
+      "name": "无任务时统计页面显示空状态",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/stats/StatsScreen.kt",
+        "line": 142,
+        "function": "StatsScreen()",
+        "snippet": "if (uiState.stats.taskBreakdown.isNotEmpty()) {\n    item { Text(text = \"任务分布\", ...) }\n    itemsIndexed(items = breakdown, ...) { ... }\n} else {\n    item {\n        Box(...) {\n            Text(text = \"暂无计时记录\", ...)\n        }\n    }\n}"
+      },
+      "risk_pattern": "空值未处理 — 仅处理 taskBreakdown 为空的情况，但 donut chart 在 loaded=true 且有数据时才显示",
+      "journey_stage": "结果",
+      "user_persona": "新用户，首次使用 App 后查看统计",
+      "preconditions": [
+        "尚未创建任何计时记录",
+        "导航到统计页面"
+      ],
+      "steps": [
+        "1. 新用户首次打开 App，创建了一个任务但未开始计时",
+        "2. 用户切换到统计 Tab",
+        "3. 页面加载：todayTotalSeconds = 0, taskBreakdown = []",
+        "4. DonutChart 在 loaded=true 后显示（空环）",
+        "5. TaskBreakdown 区域显示'暂无计时记录'"
+      ],
+      "expected_result": "空状态显示友好提示，不崩溃",
+      "actual_risk": "DonutChart 对空 slices 和 totalSeconds=0 做了保护（显示空环），但整体空状态不够友好。StatsScreen 对 loaded=true 但数据为空的情况处理正确。风险较低。",
+      "severity": "轻微",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "StatsScreen → 无任何计时记录时查看",
+        "tools_hint": ["Compose UI Test → 模拟空数据状态"]
+      },
+      "assertions": [
+        "DonutChart 显示空环（表面色环）",
+        "总时长显示 '0m'",
+        "下方显示'暂无计时记录'文字"
+      ],
+      "fix_suggestion": "无需紧急修复。可考虑在 loaded=true 且 totalSeconds=0 时显示更明确的引导文案，如'开始计时后这里会显示统计数据'。",
+      "confidence": "高",
+      "executable": true,
+      "estimated_complexity": "低",
+      "estimated_time_minutes": 5
+    },
+    {
+      "id": "UA-ASYNC-009",
+      "name": "删除正在计时的任务后孤儿记录处理",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+        "line": 383,
+        "function": "deleteTask()",
+        "snippet": "fun deleteTask(task: TaskLabel) {\n    viewModelScope.launch {\n        if (task.id == timerManager.getCurrentTaskId() && (timerManager.isRunning || timerManager.isPaused)) {\n            val elapsed = timerManager.getCurrentElapsedMs()\n            val recordId = runningRecordId\n            runningRecordId = -1\n            currentRecordSavedDuration = 0\n            timerManager.stop()\n            if (recordId != -1L) {\n                stopTimerUseCase(recordId, System.currentTimeMillis(), elapsed)\n            }\n        }\n        taskSessions.remove(task.id)?.let { session ->\n            stopTimerUseCase(session.recordId, System.currentTimeMillis(), session.elapsedMs)\n        }\n        _pausedTaskIds.value = taskSessions.keys.toSet()\n        deleteTaskUseCase(task)\n    }\n    _longPressedTaskId.value = -1\n}"
+      },
+      "risk_pattern": "状态混乱 — 删除任务时先停止计时器 → 再清理 session → 再删除任务。多步操作，但都在一个协程中。",
+      "journey_stage": "操作",
+      "user_persona": "整理任务列表的用户，可能删除正在使用的任务",
+      "preconditions": [
+        "任务 A 正在运行计时",
+        "任务 B 处于暂停状态（在 taskSessions 中）"
+      ],
+      "steps": [
+        "1. 用户长按任务 A → 显示操作菜单 → 点击删除",
+        "2. deleteTask 协程启动：检测到任务 A 是当前活动任务",
+        "3. 获取 elapsed，stop timerManager，finalize record",
+        "4. 检查 taskSessions 中有任务 B 的暂停 session → finalize",
+        "5. 删除任务 A",
+        "6. 同时在步骤 4 执行时，timerManager.timerEvents 发出 IDLE 事件",
+        "7. init 中的 collector (line 165) 也检测到 IDLE 事件，尝试 stopTimerUseCase",
+        "8. 但 recordId 在第 3 步已被设为 -1，不会重复 finalize"
+      ],
+      "expected_result": "任务被正确删除，相关计时记录被正确 finalize，无数据残留",
+      "actual_risk": "IDLE 事件在 deleteTask 协程中 stop() 后触发，但此时 runningRecordId 已被设为 -1，所以 collector 中的 check (runningRecordId != -1L) 不通过。逻辑正确但依赖时序。如果未来修改了 IDLE 处理逻辑，可能产生竞态。",
+      "severity": "一般",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "TimerScreen → 长按正在计时的任务 → 删除",
+        "tools_hint": ["Espresso 长按 + 点击删除", "数据库验证 record 的 endTime 不为 NULL"]
+      },
+      "assertions": [
+        "被删除的任务不再出现在任务列表中",
+        "timer_records 中该任务的记录 endTime 不为 NULL",
+        "数据库中无 taskId 指向已删除任务的运行中记录（endTime IS NULL）"
+      ],
+      "fix_suggestion": "当前逻辑基本正确。建议在 deleteTaskUseCase 中 cascade 清理相关计时记录（利用 Room 的外键约束或手动清理）。",
+      "confidence": "中",
+      "executable": true,
+      "estimated_complexity": "中",
+      "estimated_time_minutes": 8
+    },
+    {
+      "id": "UA-ASYNC-010",
+      "name": "todayTotalSeconds 计算中 currentRecordSavedDuration 数据竞争",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/timer/TimerViewModel.kt",
+        "line": 112,
+        "function": "todayTotalSeconds Flow 定义",
+        "snippet": "private val todayTotalSeconds = combine(\n    getTodayRecordsUseCase(todayDate).map { records -> records.sumOf { it.duration } },\n    timerManager.timerEvents\n) { dbSumMs, event ->\n    val liveElapsed = if (event.state == TimerState.RUNNING || event.state == TimerState.PAUSED) event.elapsedMs else 0L\n    (dbSumMs + liveElapsed - currentRecordSavedDuration) / 1000\n}.stateIn(...)"
+      },
+      "risk_pattern": "状态混乱 — currentRecordSavedDuration 在持久化循环（60s间隔）、startTimer()、pauseTimer()、resetTask()、deleteTask() 中并发修改，非线程安全",
+      "journey_stage": "等待",
+      "user_persona": "关注每日目标的用户，会频繁查看 DailySummaryBar",
+      "preconditions": [
+        "计时器正在运行",
+        "持久化循环可能刚更新了 currentRecordSavedDuration",
+        "同时用户进行了某个操作触发了 startTimer"
+      ],
+      "steps": [
+        "1. 计时器运行了 90 秒",
+        "2. 持久化循环在第 60 秒时执行：currentRecordSavedDuration = 60000",
+        "3. 用户在第 90 秒点击切换到另一个任务",
+        "4. startTimer 中更新 duration 后设置 currentRecordSavedDuration = 0（新任务）",
+        "5. 同时 timerManager.timerEvents 发出事件触发 todayTotalSeconds 重新计算",
+        "6. 此时 dbSumMs 可能还是旧值（数据库未来得及反应），liveElapsed 是新任务的 0",
+        "7. 导致 DailySummaryBar 短暂显示不正确的数值"
+      ],
+      "expected_result": "DailySummaryBar 始终显示准确的今日总计时长",
+      "actual_risk": "在切换任务的瞬间（毫秒级），DailySummaryBar 可能短暂闪烁显示不正确的值。组合 flow 会在所有值就绪后自动更正，但用户可能看到闪烁。",
+      "severity": "轻微",
+      "execution": {
+        "mode": "code",
+        "entry_point": "TimerViewModel.todayTotalSeconds → 单元测试并发修改 currentRecordSavedDuration",
+        "tools_hint": ["JUnit + Turbine 测试 Flow", "模拟快速任务切换"]
+      },
+      "assertions": [
+        "快速切换任务 20 次后，DailySummaryBar 显示的数值与数据库中记录的 sum 一致",
+        "无负数出现",
+        "无短暂显示错误值超过 1 秒的情况"
+      ],
+      "fix_suggestion": "使用 MutableStateFlow<Long> 管理 currentRecordSavedDuration，或将整个计算逻辑放入一个 atomic 更新的 StateFlow 中。",
+      "confidence": "中",
+      "executable": true,
+      "estimated_complexity": "中",
+      "estimated_time_minutes": 10
+    },
+    {
+      "id": "UA-UI-011",
+      "name": "倒计时模式下 targetDuration 为零时的 TimerDisplay 行为",
+      "code_evidence": {
+        "file": "app/src/main/java/com/focusflow/app/ui/components/TimerDisplay.kt",
+        "line": 37,
+        "function": "TimerDisplay()",
+        "snippet": "val displayMs = if (mode == TimerMode.COUNT_DOWN) {\n    (targetDuration - elapsedMs).coerceAtLeast(0)\n} else {\n    elapsedMs\n}"
+      },
+      "risk_pattern": "空值未处理 — 当 mode=COUNT_DOWN 但 targetDuration=0 时，displayMs = (0 - elapsedMs).coerceAtLeast(0) = 0，显示始终为 00:00:00",
+      "journey_stage": "等待",
+      "user_persona": "创建了未设置时长或时长为 0 的倒计时任务的用户",
+      "preconditions": [
+        "创建一个倒计时任务，但未设置默认时长（durationMinutes = null）",
+        "启动该任务的计时器"
+      ],
+      "steps": [
+        "1. 用户通过 TaskEditDialog 创建倒计时任务，跳过预设选择，自定义分钟数留空",
+        "2. 保存后 defaultDurationMinutes = null",
+        "3. 在 startTimer 中：target = (task.defaultDurationMinutes ?: 0) * 60 * 1000L = 0",
+        "4. timerManager.start(task.id, task.name, COUNT_DOWN, target=0)",
+        "5. TimerDisplay 中 displayMs = (0 - elapsedMs).coerceAtLeast(0) = 0",
+        "6. 计时器显示始终为 00:00:00"
+      ],
+      "expected_result": "如果倒计时没有目标时长，应回退为正计时或显示有意义的提示",
+      "actual_risk": "用户看到计时器始终显示 00:00:00，困惑以为功能不工作。实际上 timerManager 仍在计数（elapsedMs 增加），但 UI 显示被 coerceAtLeast(0) 钳制住了。",
+      "severity": "严重",
+      "execution": {
+        "mode": "ui",
+        "entry_point": "TimerScreen → 创建无时长的倒计时任务 → 启动计时",
+        "tools_hint": ["Compose UI Test → 验证 TimerDisplay 显示内容"]
+      },
+      "assertions": [
+        "倒计时模式且 targetDuration=0 时，TimerDisplay 显示始终为 00:00:00",
+        "timerManager.timerEvents 中 elapsedMs 在正常增长",
+        "但 UI 不反映实际已用时间"
+      ],
+      "fix_suggestion": "1) 在 TaskEditDialog 保存时，倒计时模式必须有正数时长；2) 在 startTimer 中，如果 COUNT_DOWN 且 targetDuration=0，自动切换为 COUNT_UP 模式。",
+      "confidence": "中",
+      "executable": true,
+      "estimated_complexity": "中",
+      "estimated_time_minutes": 8
+    }
+  ],
+  "pending_confirmations": [
+    {
+      "scenario": "Room 数据库 WAL 模式下多线程并发写入可能导致 busytimeout 异常",
+      "inference_basis": "app/src/main/java/com/focusflow/app/di/AppModule.kt:26 — Room.databaseBuilder 未设置 journal mode。默认 WAL 模式在高并发写入（快节奏切换任务 + 60 秒持久化 + 统计页查询）时可能触发 SQLite 锁冲突。",
+      "suggestion": "验证 Room 数据库是否配置了正确的超时时间和 journal mode。建议添加 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING) 并设置合理的超时时间。"
+    }
+  ]
+}

@@ -115,6 +115,11 @@ class TimerManager @Inject constructor() {
         }
     }
 
+    fun correctElapsedForBackground(elapsedMs: Long) {
+        savedElapsedMs = elapsedMs
+        baseElapsedRealtime = SystemClock.elapsedRealtime()
+    }
+
     fun getCurrentTaskId(): Long = currentTaskId
     fun getCurrentTaskName(): String = currentTaskName
     fun getCurrentMode(): TimerMode = currentMode

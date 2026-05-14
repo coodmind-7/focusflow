@@ -88,14 +88,41 @@ class TimerViewModel @Inject constructor(
     private val _pausedTaskIds = MutableStateFlow<Set<Long>>(emptySet())
     val pausedTaskIds: StateFlow<Set<Long>> = _pausedTaskIds.asStateFlow()
 
+    private var wasPausedByLifecycle = false
+
     private val appLifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStop(owner: LifecycleOwner) {
             if (timerManager.isRunning && runningRecordId != -1L) {
-                val elapsed = timerManager.getCurrentElapsedMs()
+                val elapsed = timerManager.pause()
+                currentRecordSavedDuration = elapsed
                 viewModelScope.launch {
                     stopTimerUseCase.updateDuration(runningRecordId, elapsed)
                 }
-                currentRecordSavedDuration = elapsed
+                val taskId = timerManager.getCurrentTaskId()
+                taskSessions[taskId] = TaskTimerSession(runningRecordId, elapsed)
+                runningRecordId = -1
+                _pausedTaskIds.value = taskSessions.keys.toSet()
+                wasPausedByLifecycle = true
+            }
+        }
+
+        override fun onStart(owner: LifecycleOwner) {
+            if (wasPausedByLifecycle && timerManager.isPaused) {
+                val taskId = timerManager.getCurrentTaskId()
+                val task = uiState.value.tasks.find { it.id == taskId }
+                if (task != null) {
+                    viewModelScope.launch {
+                        val session = taskSessions.remove(taskId)
+                        if (session != null) {
+                            runningRecordId = session.recordId
+                            currentRecordSavedDuration = session.elapsedMs
+                        }
+                        _pausedTaskIds.value = taskSessions.keys.toSet()
+                        timerManager.resume()
+                        startForegroundService()
+                    }
+                }
+                wasPausedByLifecycle = false
             }
         }
     }
